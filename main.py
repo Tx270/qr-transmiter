@@ -10,7 +10,7 @@ cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
 MAX_SIZE = 30
-MODE = "receive"
+MODE = "send"
 
 
 def encode_frame(frame_type, seq=-1, data=""):
@@ -55,14 +55,14 @@ def generate(data):
     img = qr.make_image(fill_color=0)
     img = np.array(img, dtype=np.uint8)
 
-    img = cv2.resize(img, (400, 400), cv2.INTER_NEAREST)
+    img = cv2.resize(img, (1000, 1000), cv2.INTER_NEAREST)
 
     cv2.imshow("QR Generator", img)
     cv2.waitKey(1)
 
 
 def sender():
-    with open("text") as f:
+    with open("shrek.txt") as f:
         data = f.read()
 
     for seq, part in chunk(data, MAX_SIZE):
