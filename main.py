@@ -1,6 +1,8 @@
 import cv2
 import numpy as np
 import qrcode
+import base64
+
 
 cap = cv2.VideoCapture(0)
 
@@ -9,8 +11,10 @@ detector = cv2.QRCodeDetector()
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-MAX_SIZE = 30
-MODE = "send"
+MAX_SIZE = 300
+MODE = "receive"
+INPUT = "shrek.txt"
+OUTPUT = "output"
 
 
 def encode_frame(frame_type, seq=-1, data=""):
@@ -40,7 +44,10 @@ def scan(target=None):
         ret, frame = cap.read()
         if not ret:
             continue
-        data, _, _ = detector.detectAndDecode(frame)
+        try:
+            data, _, _ = detector.detectAndDecode(frame)
+        except cv2.error:
+            continue
         if data:
             print(data)
         if data and (data == target or not target):
@@ -61,10 +68,7 @@ def generate(data):
     cv2.waitKey(1)
 
 
-def sender():
-    with open("shrek.txt") as f:
-        data = f.read()
-
+def sender(data):
     for seq, part in chunk(data, MAX_SIZE):
         generate(encode_frame("DATA", seq, part))
         scan(encode_frame("ACK", seq))
@@ -78,7 +82,7 @@ def receiver():
     while True:
         frame_type, recived_seq, recived_data = decode_frame(scan())
         if frame_type == "END":
-            return
+            return data
         if frame_type == "DATA" and recived_seq == seq:
             data += recived_data
             generate(encode_frame("ACK", seq))
@@ -86,9 +90,15 @@ def receiver():
 
 
 if MODE == "send":
-    sender()
+    with open(INPUT, "rb") as f:
+        data = base64.b64encode(f.read()).decode()
+
+    sender(data)
 elif MODE == "receive":
-    receiver()
+    data = receiver()
+
+    with open(OUTPUT, "wb") as f:
+        f.write(base64.b64decode(data.encode()))
 
 cap.release()
 cv2.destroyAllWindows()
