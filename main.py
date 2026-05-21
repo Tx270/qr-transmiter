@@ -10,9 +10,7 @@ cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
 MAX_SIZE = 300
-SAVE_EVERY = 10
-
-MODE = "send"
+MODE = "send" 
 INPUT = "shrek.txt"
 OUTPUT = "output"
 
@@ -22,6 +20,8 @@ def encode_frame(frame_type, seq=0, data=""):
 
 
 def decode_frame(text):
+    if not text:
+        return None, None, None
     try:
         frame_type, seq, data = text.split("|", 2)
         return frame_type, int(seq), data
@@ -39,16 +39,15 @@ def chunk(data, size):
 def read_frame():
     while True:
         ret, frame = cap.read()
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            return None
         if not ret:
             continue
-
         try:
             data, _, _ = detector.detectAndDecode(frame)
         except cv2.error:
             continue
-
         if data:
-            print(data)
             return data
 
 
@@ -56,7 +55,6 @@ def wait_for_type(frame_type):
     while True:
         data = read_frame()
         t, seq, payload = decode_frame(data)
-
         if t == frame_type:
             return t, seq, payload
 
@@ -72,12 +70,9 @@ def generate(data):
     qr = qrcode.QRCode(box_size=10, border=1)
     qr.add_data(data)
     qr.make(fit=True)
-
     img = qr.make_image(fill_color=0)
     img = np.array(img, dtype=np.uint8)
-
-    img = cv2.resize(img, (800, 800), cv2.INTER_NEAREST)
-
+    img = cv2.resize(img, (600, 600), cv2.INTER_NEAREST)
     cv2.imshow("QR", img)
     cv2.waitKey(1)
 
@@ -90,62 +85,75 @@ def safe_b64decode(data):
 
 
 def sender(data, file_name):
+    print("sending start...")
     generate(encode_frame("START", 0, file_name))
-    wait_for_type("START")
-
+    wait_for_ack(0)
+    
+    print("sending data...")
+    last_seq = 0
     for seq, part in chunk(data, MAX_SIZE):
+        print(f"chunk {seq}")
         generate(encode_frame("DATA", seq, part))
         wait_for_ack(seq)
+        last_seq = seq
 
-    generate(encode_frame("END", seq, ""))
+    print("sending end...")
+    generate(encode_frame("END", last_seq + 1, ""))
+    wait_for_ack(last_seq + 1)
+    print("done")
 
 
 def receiver():
     buffer = ""
-    seq = 1
-    chunk_count = 0
-
+    print("waiting for start...")
     _, _, file_name = wait_for_type("START")
-
+    print(f"file: {file_name}")
+    generate(encode_frame("ACK", 0, ""))
+    
+    seq = 1
     temp_file = f"{OUTPUT}.tmp"
 
-    with open(temp_file, "wb") as f:
-        while True:
-            raw = read_frame()
-            frame_type, recived_seq, recived_data = decode_frame(raw)
+    while True:
+        raw = read_frame()
+        frame_type, received_seq, received_data = decode_frame(raw)
 
-            if frame_type == "END":
-                if buffer:
-                    f.write(safe_b64decode(buffer))
-                break
+        if frame_type == "END":
+            print("received end")
+            generate(encode_frame("ACK", received_seq, ""))
+            break
 
-            if frame_type == "DATA" and recived_seq == seq:
-                buffer += recived_data
+        if frame_type == "DATA":
+            if received_seq == seq:
+                print(f"chunk {received_seq}")
+                buffer += received_data
+                generate(encode_frame("ACK", received_seq, ""))
                 seq += 1
-                chunk_count += 1
+            elif received_seq == seq - 1:
+                generate(encode_frame("ACK", received_seq, ""))
 
-                generate(encode_frame("ACK", recived_seq, ""))
+    print("decoding...")
+    try:
+        with open(temp_file, "wb") as f:
+            f.write(safe_b64decode(buffer))
+    except Exception as e:
+        print(f"error: {e}")
 
-                if chunk_count >= SAVE_EVERY:
-                    f.write(safe_b64decode(buffer))
-                    buffer = ""
-                    chunk_count = 0
-
-        return file_name, temp_file
+    return file_name, temp_file
 
 
-if MODE == "send":
-    with open(INPUT, "rb") as f:
-        data = base64.b64encode(f.read()).decode()
+try:
+    if MODE == "send":
+        with open(INPUT, "rb") as f:
+            data = base64.b64encode(f.read()).decode()
+        sender(data, INPUT)
 
-    sender(data, INPUT)
+    elif MODE == "receive":
+        file_name, temp_file = receiver()
+        with open(file_name or OUTPUT, "wb") as out:
+            with open(temp_file, "rb") as inp:
+                out.write(inp.read())
+        print(f"saved: {file_name}")
 
-elif MODE == "receive":
-    file_name, temp_file = receiver()
-
-    with open(file_name or OUTPUT, "wb") as out:
-        with open(temp_file, "rb") as inp:
-            out.write(inp.read())
-
-cap.release()
-cv2.destroyAllWindows()
+finally:
+    cap.release()
+    cv2.destroyAllWindows()
